@@ -157,6 +157,53 @@ class NutritionAgent:
         response = self.tokenizer.batch_decode(generated_ids, skip_special_tokens=True)[0]
         
         return response
+    
+    def _extract_days(self, query: str) -> int:
+      """Извлекает количество дней из запроса. Возвращает 1, если не указано."""
+      q = query.lower()
+      numbers = {
+          'один': 1, 'одного': 1, 'одну': 1,
+          'два': 2, 'двух': 2,
+          'три': 3, 'трёх': 3,
+          'четыре': 4, 'четырёх': 4,
+          'пять': 5, 'пяти': 5,
+          'шесть': 6, 'шести': 6,
+          'семь': 7, 'семи': 7,
+          'восемь': 8, 'восьми': 8,
+          'девять': 9, 'девяти': 9,
+          'десять': 10, 'десяти': 10,
+          'неделя': 7, 'недели': 7, 'недель': 7
+      }
+      match = re.search(r'на\s+(\d+)\s+(?:день|дня|дней)', q)
+      if match:
+          return int(match.group(1))
+      match = re.search(r'на\s+(\d+)\s*\-?\s*днев', q)
+      if match:
+          return int(match.group(1))
+      for word, num in numbers.items():
+          if re.search(rf'на\s+{word}\s+(?:день|дня|дней)', q):
+              return num
+      if re.search(r'на\s+недел[юи]', q):
+          return 7
+      return 1
+
+    def _build_multi_day_meal_plan(self, user_query: str, user_id: int, days: int) -> str:
+      """Составляет план на несколько дней, избегая повторения рецептов."""
+      used_titles = []
+      plan_parts = []
+      for day in range(1, days + 1):
+          day_plan = self._build_structured_meal_plan(user_query, user_id, exclude_titles=used_titles)
+          if day_plan.startswith("Не удалось подобрать") or "не удалось подобрать" in day_plan.lower():
+              plan_parts.append(f"День {day}: не удалось составить рацион. Попробуйте изменить запрос.")
+              break
+          plan_parts.append(f"🍽️ День {day}\n" + day_plan)
+          # Извлекаем названия блюд из day_plan (ищем строки "Название:")
+          for line in day_plan.split('\n'):
+              if line.startswith('Название:'):
+                  title = line.replace('Название:', '').strip()
+                  used_titles.append(title)
+      return "\n\n" + "\n\n".join(plan_parts)
+
 
     def _get_user_profile_text(self, user_id: int) -> str:
         """Возвращает текстовое описание профиля пользователя"""
@@ -282,13 +329,14 @@ class NutritionAgent:
         return True
 
     # ---------- МЕТОДЫ ДЛЯ СТРУКТУРИРОВАННОГО ПЛАНИРОВАНИЯ ----------
-    def _build_structured_meal_plan(self, user_query: str, user_id: int) -> str:
+    def _build_structured_meal_plan(self, user_query: str, user_id: int, exclude_titles: List[str] = None) -> str:
         """Строит рацион на день, запрашивая рецепты для каждой категории отдельно."""
+        if exclude_titles is None:
+            exclude_titles = []
         user = self.db.get_user(user_id)
         if not user:
             return "Профиль не найден. Пожалуйста, заполните профиль через /start."
 
-        # Формируем базовый запрос с учётом аллергий и типа питания
         base_query = user_query
         if user['allergies'] and user['allergies'].lower() != 'нет':
             base_query += f" без {user['allergies']}"
@@ -297,46 +345,43 @@ class NutritionAgent:
 
         meal_plan = {}
 
-        # --- Завтрак ---
-        breakfast = self.rag.get_recipe_by_category(base_query + " завтрак", "завтрак")
+        # Завтрак
+        breakfast = self.rag.get_recipe_by_category(base_query + " завтрак", "завтрак", exclude_titles=exclude_titles)
         if breakfast:
             meal_plan['breakfast'] = breakfast
         else:
-            fallback = self.rag.get_recipe_by_category(base_query, "завтрак")
+            fallback = self.rag.get_recipe_by_category(base_query, "завтрак", exclude_titles=exclude_titles)
             if fallback:
                 meal_plan['breakfast'] = fallback
 
-        # --- Обед: суп ---
-        soup = self.rag.get_recipe_by_category(base_query + " суп", "суп")
+        # Суп
+        soup = self.rag.get_recipe_by_category(base_query + " суп", "суп", exclude_titles=exclude_titles)
         if soup:
             meal_plan['soup'] = soup
         else:
-            fallback = self.rag.get_recipe_by_category(base_query, "суп")
+            fallback = self.rag.get_recipe_by_category(base_query, "суп", exclude_titles=exclude_titles)
             if fallback:
                 meal_plan['soup'] = fallback
 
-        # --- Обед: основное блюдо (с фильтрацией) ---
-        main = self.rag.get_recipe_by_category(base_query + " основное блюдо", "основное блюдо")
+        # Основное блюдо на обед
+        main = self.rag.get_recipe_by_category(base_query + " основное блюдо", "основное блюдо", exclude_titles=exclude_titles)
         if main and self._is_desirable_main(main):
             meal_plan['main'] = main
         else:
-            # fallback: ищем без категории, но фильтруем
-            candidates = self.rag.search(base_query + " основное блюдо", top_k=50)
+            candidates = self.rag.search(base_query + " основное блюдо", top_k=50, exclude_titles=exclude_titles)
             for _, row in candidates.iterrows():
                 if self._is_desirable_main(row.to_dict()):
                     meal_plan['main'] = row.to_dict()
                     break
 
-        # --- Ужин: гарнир ---
+        # Гарнир
         side_dish = None
-        # Сначала пробуем найти по категории "гарнир" (если есть)
-        side = self.rag.get_recipe_by_category(base_query + " гарнир", "гарнир")
+        side = self.rag.get_recipe_by_category(base_query + " гарнир", "гарнир", exclude_titles=exclude_titles)
         if side:
             side_dish = side
         else:
-            # Ищем по ключевым словам: рис, картофель, гречка, паста, макароны, каша
             side_query = base_query + " рис картофель гречка паста макароны каша"
-            candidates = self.rag.search(side_query, top_k=50)
+            candidates = self.rag.search(side_query, top_k=50, exclude_titles=exclude_titles)
             for _, row in candidates.iterrows():
                 title = row['title'].lower()
                 if any(kw in title for kw in ['гарнир', 'рис', 'картофель', 'гречка', 'паста', 'макароны', 'каша']):
@@ -345,44 +390,31 @@ class NutritionAgent:
         if side_dish:
             meal_plan['side'] = side_dish
 
-        # --- Ужин: основное блюдо (стараемся не повторять обед) ---
+        # Основное блюдо на ужин
         dinner_main = None
-
-        # Этап 1: поиск по категории с фильтрацией
-        candidate = self.rag.get_recipe_by_category(base_query + " основное блюдо", "основное блюдо")
+        candidate = self.rag.get_recipe_by_category(base_query + " основное блюдо", "основное блюдо", exclude_titles=exclude_titles)
         if candidate and self._is_desirable_main(candidate):
             if not meal_plan.get('main') or candidate['title'] != meal_plan['main']['title']:
                 dinner_main = candidate
-
-        # Этап 2: если не нашли, ищем среди топ-100 с фильтрацией
         if not dinner_main:
-            candidates = self.rag.search(base_query + " основное блюдо", top_k=100)
+            candidates = self.rag.search(base_query + " основное блюдо", top_k=100, exclude_titles=exclude_titles)
             for _, row in candidates.iterrows():
                 if self._is_desirable_main(row.to_dict()):
                     if not meal_plan.get('main') or row['title'] != meal_plan['main']['title']:
                         dinner_main = row.to_dict()
                         break
-
-        # Этап 3: если всё ещё не нашли, ищем любые рецепты, исключая завтраки и супы
         if not dinner_main:
-            candidates = self.rag.search(base_query, top_k=100)
+            candidates = self.rag.search(base_query, top_k=100, exclude_titles=exclude_titles)
             for _, row in candidates.iterrows():
                 title = row['title'].lower()
                 meal_type = row.get('meal_type', '').lower()
-                # Пропускаем завтраки, супы, напитки, соусы
                 if any(x in title for x in ['завтрак', 'каша', 'омлет']) or meal_type in ['завтрак', 'суп', 'напиток', 'соус']:
                     continue
-                # Проверяем, что это не десерт (если есть другие варианты)
-                if meal_type == 'десерт' and not any(x in title for x in ['десерт']):
-                    # но если десерт, то разрешим только если совсем нет других
-                    pass
                 if not meal_plan.get('main') or row['title'] != meal_plan['main']['title']:
                     dinner_main = row.to_dict()
                     break
-
-        # Этап 4: последняя попытка — взять что угодно, кроме завтрака и супа
         if not dinner_main:
-            candidates = self.rag.search(base_query, top_k=200)
+            candidates = self.rag.search(base_query, top_k=200, exclude_titles=exclude_titles)
             for _, row in candidates.iterrows():
                 title = row['title'].lower()
                 if 'завтрак' in title or 'каша' in title or 'омлет' in title:
@@ -392,22 +424,21 @@ class NutritionAgent:
                 if not meal_plan.get('main') or row['title'] != meal_plan['main']['title']:
                     dinner_main = row.to_dict()
                     break
-
         if dinner_main:
             meal_plan['dinner'] = dinner_main
 
-        # --- Десерт ---
-        dessert = self.rag.get_recipe_by_category(base_query + " десерт", "десерт")
+        # Десерт
+        dessert = self.rag.get_recipe_by_category(base_query + " десерт", "десерт", exclude_titles=exclude_titles)
         if dessert:
             meal_plan['dessert'] = dessert
         else:
-            fallback = self.rag.get_recipe_by_category(base_query, "десерт")
+            fallback = self.rag.get_recipe_by_category(base_query, "десерт", exclude_titles=exclude_titles)
             if fallback:
                 meal_plan['dessert'] = fallback
 
-        return self._format_structured_meal_plan(meal_plan)
+        return self._format_structured_meal_plan(meal_plan, user_id)
 
-    def _format_structured_meal_plan(self, plan: dict) -> str:
+    def _format_structured_meal_plan(self, plan: dict, user_id: int) -> str:
         """Форматирует собранные рецепты в читаемый текст."""
         lines = []
         lines.append("Ваш план питания на день:")
@@ -417,7 +448,7 @@ class NutritionAgent:
         lines.append("ЗАВТРАК")
         if 'breakfast' in plan:
             r = plan['breakfast']
-            lines.append(f"Название: {r['title']}")
+            lines.append(f"Основное блюдо: {r['title']}")
             lines.append("Ингредиенты")
             for ing in r.get('ingredients_list', []):
                 lines.append(ing)
@@ -484,6 +515,8 @@ class NutritionAgent:
         else:
             lines.append("Не удалось подобрать десерт.")
         lines.append("")
+        user = self.db.get_user(user_id)
+        lines.append(f"✨ Рацион сбалансирован и соответствует вашей норме в {user['calories_target']:.0f} ккал/день. ✨")
         lines.append("Приятного аппетита!")
 
         return "\n".join(lines)
@@ -494,7 +527,11 @@ class NutritionAgent:
         # --- Определяем, нужно ли составлять рацион ---
         meal_plan_keywords = ['рацион', 'меню', 'составь', 'питание', 'на день', 'завтрак', 'обед', 'ужин']
         if any(kw in user_query.lower() for kw in meal_plan_keywords):
-            return self._build_structured_meal_plan(user_query, user_id)
+            days = self._extract_days(user_query)
+            if days > 1:
+                return self._build_multi_day_meal_plan(user_query, user_id, days)
+            else:
+                return self._build_structured_meal_plan(user_query, user_id)
 
         # --- Далее идёт существующий код ReAct-цикла ---
         self.current_user_id = user_id
