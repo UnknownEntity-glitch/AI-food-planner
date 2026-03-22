@@ -12,6 +12,7 @@ from modules.inventory import PantryManager
 from modules.rag import RecipeRAG
 from modules.agent import NutritionAgent, MasterAgent
 
+
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
@@ -25,7 +26,6 @@ if USE_AGENT:
         agent = NutritionAgent(db, rag)
 else:
     agent = None
-
 
 class ProfileStates(StatesGroup):
     waiting_for_goal = State()
@@ -53,7 +53,7 @@ class MenuStates(StatesGroup):
 
 def get_main_menu():
     buttons = [
-        [KeyboardButton(text="🍎 Составить меню"), KeyboardButton(text="🛒 Список покупок")],
+        [KeyboardButton(text="🍎 Составить меню")],
         [KeyboardButton(text="🧊 Мои продукты"), KeyboardButton(text="👤 Мой профиль")]
     ]
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
@@ -459,7 +459,10 @@ async def process_menu_query(message: types.Message, state: FSMContext):
         await state.clear()
         return
 
-    await message.answer("⏳ Составляю рацион...")
+    # Отправляем статусное сообщение и запоминаем его
+    status_msg = await message.answer("⏳ Составляю рацион...")
+
+    # Составляем рацион (долгая операция)
     if USE_AGENT and agent:
         response = agent.run(user_id, query)
     else:
@@ -470,14 +473,15 @@ async def process_menu_query(message: types.Message, state: FSMContext):
         meal_plan = rag.build_meal_plan(query, profile)
         response = rag.format_meal_plan(meal_plan)
 
+    # Удаляем статусное сообщение
+    await bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
+
+    # Разбиваем длинный ответ на части и отправляем
     parts = split_text(response)
     for part in parts:
         await message.answer(part, parse_mode=None)
-    await state.clear()
 
-@dp.message(F.text == "🛒 Список покупок")
-async def shopping_list(message: types.Message):
-    await message.answer("Функция в разработке.")
+    await state.clear()
 
 async def main():
     print("Бот запущен...")
