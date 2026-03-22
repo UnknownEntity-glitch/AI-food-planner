@@ -7,10 +7,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN", "8356367584:AAF5hc0ueznNw2Kp8feA0AM98nAN-_4-E
 DATA_DIR = os.getenv("DATA_DIR", "data")
 RECIPES_ZIP = os.getenv("RECIPES_ZIP", "data/recipes.zip")
 USE_AGENT = os.getenv("USE_AGENT", "true").lower() == "true"
-MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
-
 USE_MASTER_AGENT = os.getenv("USE_MASTER_AGENT", "true").lower() == "true"
-
-# Параметры ReAct-цикла
-MAX_AGENT_ITERATIONS = int(os.getenv("MAX_AGENT_ITERATIONS", "5"))  # максимальное количество шагов
+MAX_AGENT_ITERATIONS = int(os.getenv("MAX_AGENT_ITERATIONS", "5")) 
 AGENT_TEMPERATURE = float(os.getenv("AGENT_TEMPERATURE", "0.1"))
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-7B-Instruct")
