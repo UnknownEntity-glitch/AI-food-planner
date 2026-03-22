@@ -225,14 +225,16 @@ class RecipeRAG:
         import shutil
         shutil.rmtree(os.path.join(self.data_dir, 'recipes_temp'))
 
-    def search(self, query: str, top_k: int = 100) -> pd.DataFrame:
-        """Векторный поиск по запросу."""
-        emb = self.embedder.encode([query], convert_to_numpy=True)
-        faiss.normalize_L2(emb)
-        distances, indices = self.index.search(emb, top_k)
-        results = self.df.iloc[indices[0]].copy()
-        results['score'] = distances[0]
-        return results
+    def search(self, query: str, top_k: int = 100, exclude_titles: List[str] = None) -> pd.DataFrame:
+      """Векторный поиск по запросу, исключая указанные названия."""
+      emb = self.embedder.encode([query], convert_to_numpy=True)
+      faiss.normalize_L2(emb)
+      distances, indices = self.index.search(emb, top_k)
+      results = self.df.iloc[indices[0]].copy()
+      results['score'] = distances[0]
+      if exclude_titles:
+          results = results[~results['title'].isin(exclude_titles)]
+      return results
 
     # ---------- Методы для составления рациона (из оригинального файла) ----------
     def _extract_allergens_and_keywords(self, query: str) -> Tuple[List[str], List[str]]:
@@ -546,31 +548,23 @@ class RecipeRAG:
         return "\n".join(lines)
 
     # ---------- НОВЫЙ МЕТОД: поиск рецепта по категории ----------
-    def get_recipe_by_category(self, query: str, category: str, top_k: int = 100) -> Optional[Dict]:
-        """
-        Поиск рецепта по запросу с обязательной фильтрацией по категории.
-        Возвращает словарь с данными рецепта или None.
-        """
-        results = self.search(query, top_k=top_k)
-        if results.empty:
-            return None
+    def get_recipe_by_category(self, query: str, category: str, top_k: int = 100, exclude_titles: List[str] = None) -> Optional[Dict]:
+      """Поиск рецепта по запросу с обязательной фильтрацией по категории и исключением названий."""
+      results = self.search(query, top_k=top_k, exclude_titles=exclude_titles)
+      if results.empty:
+          return None
 
-        # Фильтрация по точному совпадению категории
-        cat_filter = results['meal_type'].str.lower() == category.lower()
-        filtered = results[cat_filter]
+      cat_filter = results['meal_type'].str.lower() == category.lower()
+      filtered = results[cat_filter]
 
-        # Если нет точных совпадений, ищем частичное вхождение
-        if filtered.empty:
-            filtered = results[results['meal_type'].str.lower().str.contains(category.lower(), na=False)]
+      if filtered.empty:
+          filtered = results[results['meal_type'].str.lower().str.contains(category.lower(), na=False)]
 
-        # Если и частичных нет, берём лучший результат без фильтрации (но с проверкой, что категория подходит)
-        if filtered.empty:
-            # Попробуем взять топ-1, если его категория подходит под категорию
-            best = results.iloc[0]
-            if best['meal_type'] and category.lower() in best['meal_type'].lower():
-                return best.to_dict()
-            else:
-                return None
+      if filtered.empty:
+          best = results.iloc[0]
+          if best['meal_type'] and category.lower() in best['meal_type'].lower():
+              return best.to_dict()
+          else:
+              return None
 
-        best = filtered.iloc[0]
-        return best.to_dict()
+      return filtered.iloc[0].to_dict()
