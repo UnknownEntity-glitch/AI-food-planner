@@ -10,7 +10,17 @@ from config import BOT_TOKEN, DATA_DIR, RECIPES_ZIP, USE_AGENT
 from modules.database import Database
 from modules.inventory import PantryManager
 from modules.rag import RecipeRAG
-from modules.agent import NutritionAgent
+from modules.agent import NutritionAgent, MasterAgent
+
+# В начале файла:
+if USE_AGENT:
+    if USE_MASTER_AGENT:
+        agent = MasterAgent(db, rag)
+    else:
+        agent = NutritionAgent(db, rag)
+else:
+    agent = None
+
 
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
