@@ -6,21 +6,11 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.storage.memory import MemoryStorage
 from typing import List
-from config import BOT_TOKEN, DATA_DIR, RECIPES_ZIP, USE_AGENT
+from config import BOT_TOKEN, DATA_DIR, RECIPES_ZIP, USE_AGENT, USE_MASTER_AGENT
 from modules.database import Database
 from modules.inventory import PantryManager
 from modules.rag import RecipeRAG
 from modules.agent import NutritionAgent, MasterAgent
-
-# В начале файла:
-if USE_AGENT:
-    if USE_MASTER_AGENT:
-        agent = MasterAgent(db, rag)
-    else:
-        agent = NutritionAgent(db, rag)
-else:
-    agent = None
-
 
 bot = Bot(token=BOT_TOKEN)
 storage = MemoryStorage()
@@ -29,9 +19,13 @@ dp = Dispatcher(storage=storage)
 db = Database()
 rag = RecipeRAG(DATA_DIR, RECIPES_ZIP)
 if USE_AGENT:
-    agent = NutritionAgent(db, rag)
+    if USE_MASTER_AGENT:
+        agent = MasterAgent(db, rag)
+    else:
+        agent = NutritionAgent(db, rag)
 else:
     agent = None
+
 
 class ProfileStates(StatesGroup):
     waiting_for_goal = State()
